@@ -21,8 +21,8 @@ Built for the CockroachDB x AWS Agentic Hackathon (2026).
 Security triage is repetitive in a very specific, well-documented way:
 analysts and developers re-investigate the same false positives over and
 over because the reasoning behind a past dismissal is never captured
-anywhere searchable. See `docs/problem_sources.md` for the specific
-GitHub issues, blog posts, and postmortems this project is grounded in.
+anywhere searchable. See `problem_sources.md` for the specific GitHub
+issues, blog posts, and postmortems this project is grounded in.
 
 ## How it works
 
@@ -40,7 +40,7 @@ GitHub issues, blog posts, and postmortems this project is grounded in.
 
 ## Architecture
 
-![Architecture diagram](docs/architecture_diagram.jpg)
+![Architecture diagram](architecture_diagram.jpg)
 
 - **CockroachDB Serverless** (`ap-south-1`) — the persistent memory
   layer. Two tables, `warnings` and `decisions`, with a
@@ -50,43 +50,40 @@ GitHub issues, blog posts, and postmortems this project is grounded in.
   ingest Lambda to run an audited, read-only cross-repo frequency query
   via a service-account-authenticated JSON-RPC call, independent of the
   app's own direct database connection.
-- **AWS Lambda** (3 functions, Python 3.12) — `ingest`, `decide`,
-  `history`, each exposed via a public Function URL:
-  - `lambdas/ingest` — embeds new warnings, runs the vector search,
+- **AWS Lambda** (4 functions, Python 3.12), each exposed via a public
+  Function URL (except the backfill one, which is invoked manually):
+  - `ingest_lambda.py` — embeds new warnings, runs the vector search,
     calls the MCP server, returns recommendations.
-  - `lambdas/decide` — writes Accept/Override decisions back to
+  - `decide_lambda.py` — writes Accept/Override decisions back to
     CockroachDB, including the optional cross-org `shared` flag.
-  - `lambdas/history` — returns the full chronological decision
+  - `history_lambda.py` — returns the full chronological decision
     history for a given rule/CVE (the audit-trail feature).
-  - `lambdas/embed_backfill` — a maintenance function that computes
+  - `embed_backfill_lambda.py` — a maintenance function that computes
     embeddings for any row inserted directly via SQL (e.g. seed data)
     rather than through the ingest endpoint.
-- **Amazon S3** — hosts `frontend/index.html`, a single-file static
-  web app (React via CDN, no build step), as the live product.
+- **Amazon S3** — hosts `index.html`, a single-file static web app
+  (React via CDN, no build step), as the live product.
 
 No paid LLM APIs are used anywhere in this pipeline — embeddings are
 computed with a free, local, zero-dependency hashing-based vectorizer
-(see `lambdas/ingest/lambda_function.py`), keeping the whole project
-runnable at effectively $0.
+(see `ingest_lambda.py`), keeping the whole project runnable at
+effectively $0.
 
 ## Repository layout
 
 ```
-precedent-repo/
-├── lambdas/
-│   ├── ingest/lambda_function.py        # embed + vector search + MCP enrichment
-│   ├── decide/lambda_function.py        # write-back Accept/Override decisions
-│   ├── history/lambda_function.py       # audit trail for a rule_id
-│   └── embed_backfill/lambda_function.py# maintenance: backfill missing embeddings
-├── db/
-│   ├── 01_schema_and_seed.sql           # tables + initial seed data
-│   ├── 02_shared_precedent_migration.sql# adds org/shared columns + cross-org seed
-│   └── 03_expanded_seed_data.sql        # additional realistic seed history
-├── frontend/
-│   └── index.html                       # the live UI, single static file
-└── docs/
-    ├── architecture_diagram.jpg
-    └── problem_sources.md
+├── ingest_lambda.py                   # embed + vector search + MCP enrichment
+├── decide_lambda.py                   # write-back Accept/Override decisions
+├── history_lambda.py                  # audit trail for a rule_id
+├── embed_backfill_lambda.py           # maintenance: backfill missing embeddings
+├── 01_schema_and_seed.sql             # tables + initial seed data
+├── 02_shared_precedent_migration.sql  # adds org/shared columns + cross-org seed
+├── 03_expanded_seed_data.sql          # additional realistic seed history
+├── index.html                         # the live frontend, single static file
+├── architecture_diagram.jpg
+├── problem_sources.md
+├── LICENSE
+└── README.md
 ```
 
 ## Setup — deploying your own instance
@@ -94,8 +91,8 @@ precedent-repo/
 ### 1. CockroachDB
 
 1. Create a free CockroachDB Serverless cluster (any cloud region).
-2. Run `db/01_schema_and_seed.sql`, then `db/02_shared_precedent_migration.sql`,
-   then `db/03_expanded_seed_data.sql`, in order, in the CockroachDB SQL shell.
+2. Run `01_schema_and_seed.sql`, then `02_shared_precedent_migration.sql`,
+   then `03_expanded_seed_data.sql`, in order, in the CockroachDB SQL shell.
 3. In the cluster's **Connect** page, note your connection details
    (host, user, password, database — normally `defaultdb`).
 4. Enable the **Managed MCP Server** for the cluster and create a
@@ -105,27 +102,27 @@ precedent-repo/
 
 ### 2. AWS Lambda (x4 functions)
 
-For each function in `lambdas/`:
+For each of the four `*_lambda.py` files:
 
 1. Create a new Lambda function, Python 3.12 runtime.
 2. Attach a `psycopg2-binary` layer for your runtime/region — a public
    prebuilt one is available via [Klayers](https://api.klayers.cloud/api/v2/p3.12/layers/latest/).
-3. Paste in the corresponding `lambda_function.py`.
+3. Paste in the file's contents as the function code.
 4. Set environment variables:
    - `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` (all four functions)
-   - `MCP_API_KEY`, `MCP_CLUSTER_ID` (`ingest` function only, for the MCP enrichment step)
+   - `MCP_API_KEY`, `MCP_CLUSTER_ID` (`ingest_lambda.py` only, for the MCP enrichment step)
 5. Enable a **Function URL** with auth type `NONE` and CORS wildcarded
-   (`*` for origin/headers/methods) for `ingest`, `decide`, and
-   `history` (the `embed_backfill` function only needs to be invoked
-   manually/on a schedule, no public URL required).
-6. Set the timeout to at least 30-60 seconds on `ingest` (it makes an
-   external MCP call per warning).
+   (`*` for origin/headers/methods) for `ingest_lambda.py`,
+   `decide_lambda.py`, and `history_lambda.py` (`embed_backfill_lambda.py`
+   only needs to be invoked manually/on a schedule, no public URL required).
+6. Set the timeout to at least 30-60 seconds on `ingest_lambda.py` (it
+   makes an external MCP call per warning).
 
 ### 3. Frontend
 
-1. Open `frontend/index.html` and replace the `INGEST_URL`,
-   `DECIDE_URL`, and `HISTORY_URL` constants near the top with your own
-   three Function URLs from the step above.
+1. Open `index.html` and replace the `INGEST_URL`, `DECIDE_URL`, and
+   `HISTORY_URL` constants near the top with your own three Function
+   URLs from the step above.
 2. Create an S3 bucket, enable **static website hosting** with
    `index.html` as the index document, disable "Block all public
    access," and attach a public-read bucket policy.
@@ -136,8 +133,8 @@ For each function in `lambdas/`:
 
 The SQL seed files insert warnings without embeddings (embeddings are
 computed in application code, not SQL). After running the DB setup,
-manually invoke `embed_backfill` once (empty `{}` test event) to embed
-every seeded row before using the app.
+manually invoke `embed_backfill_lambda.py` once (empty `{}` test event)
+to embed every seeded row before using the app.
 
 ## CockroachDB tools used
 
