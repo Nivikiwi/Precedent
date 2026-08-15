@@ -71,20 +71,25 @@ effectively $0.
 
 ## Repository layout
 
-```
-├── ingest_lambda.py                   # embed + vector search + MCP enrichment
-├── decide_lambda.py                   # write-back Accept/Override decisions
-├── history_lambda.py                  # audit trail for a rule_id
-├── embed_backfill_lambda.py           # maintenance: backfill missing embeddings
-├── 01_schema_and_seed.sql             # tables + initial seed data
-├── 02_shared_precedent_migration.sql  # adds org/shared columns + cross-org seed
-├── 03_expanded_seed_data.sql          # additional realistic seed history
-├── index.html                         # the live frontend, single static file
-├── architecture_diagram.jpg
-├── problem_sources.md
+```text
+├── database/
+│   ├── 01_schema_and_seed.sql
+│   ├── 02_shared_precedent_migration.sql
+│   └── 03_expanded_seed_data.sql
+│
+├── frontend/
+│   └── index.html
+│
+├── lambdas/
+│   ├── decide_lambda.py
+│   ├── embed_backfill_lambda.py
+│   ├── history_lambda.py
+│   └── ingest_lambda.py
+│
 ├── LICENSE
-└── README.md
-```
+├── README.md
+├── architecture_diagram.jpg
+└── problem_sources.md
 
 ## Setup — deploying your own instance
 
