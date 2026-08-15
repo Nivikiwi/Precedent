@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Precedent</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+
+const { useState } = React;
+
+const INGEST_URL = "https://4cdchxlvxdn3j4dodvshr6m7vy0hroyu.lambda-url.ap-south-1.on.aws/";
+const DECIDE_URL = "https://fsomhtmwsftdqstybpzxgn6vqu0drbdc.lambda-url.ap-south-1.on.aws/";
+const HISTORY_URL = "https://lcgkd2bdzopur5vu27lqvft4ii0ahwsc.lambda-url.ap-south-1.on.aws/";
+
+const SAMPLE_SCAN = {
+  repo: "notifications-service",
+  warnings: [
+    {
+      rule_id: "CVE-2015-5237",
+      package: "google.golang.org/protobuf",
+      file_path: "go.sum",
+      description: "Denial of service in protobuf C++ parsing via malformed message",
+      severity: "high",
+    },
+    {
+      rule_id: "CVE-2023-45857",
+      package: "axios",
+      file_path: "package-lock.json",
+      description: "Axios exposes confidential data to unintended third party via redirect",
+      severity: "medium",
+    },
+  ],
+};
+
+function parseCrossRepo(ctx) {
+  try {
+    if (!ctx || !ctx.result) return null;
+    const text = ctx.result.content[0].text;
+    const parsed = JSON.parse(text);
+    return parsed.rows && parsed.rows[0] ? parsed.rows[0] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function Stamp({ hasMatch }) {
+  return (
+    <div
+      className={
+        "absolute top-4 right-4 -rotate-6 border-double border-4 px-3 py-1 font-serif text-xs uppercase tracking-widest select-none " +
+        (hasMatch ? "border-amber-500 text-amber-500" : "border-stone-600 text-stone-500")
+      }
+    >
+      {hasMatch ? "Precedent found" : "No precedent"}
+    </div>
+  );
+}
+
+function SeverityChip({ severity }) {
+  const styles = {
+    critical: "bg-rose-950 text-rose-300 border-rose-800",
+    high: "bg-orange-950 text-orange-300 border-orange-800",
+    medium: "bg-amber-950 text-amber-300 border-amber-800",
+    low: "bg-stone-800 text-stone-300 border-stone-700",
+  };
+  const cls = styles[severity] || styles.low;
+  return (
+    <span className={"font-mono text-xs px-2 py-0.5 rounded border " + cls}>
+      {severity || "unknown"}
+    </span>
+  );
+}
+
+function CaseCard({ item }) {
+  const [mode, setMode] = useState("idle");
+  const [overrideDecision, setOverrideDecision] = useState("dismissed");
+  const [overrideReasoning, setOverrideReasoning] = useState("");
+  const [finalDecision, setFinalDecision] = useState(null);
+  const [shareAnonymously, setShareAnonymously] = useState(false);
+  const [history, setHistory] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  async function toggleHistory() {
+    if (historyOpen) {
+      setHistoryOpen(false);
+      return;
+    }
+    setHistoryOpen(true);
+    if (history) return;
+    setHistoryLoading(true);
+    try {
+      const resp = await fetch(HISTORY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rule_id: item.rule_id }),
+      });
+      const data = await resp.json();
+      setHistory(data.history || []);
+    } catch (e) {
+      setHistory([]);
+    }
+    setHistoryLoading(false);
+  }
+
+  const best = item.similar_warnings && item.similar_warnings[0];
+  const hasStrongMatch = best && best.distance < 0.3;
+  const crossRepo = parseCrossRepo(item.cross_repo_context);
+
+  async function submitDecision(decision, reasoning, shared) {
+    setMode("submitting");
+    try {
+      await fetch(DECIDE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          warning_id: item.warning_id,
+          decision,
+          reasoning,
+          decided_by: "developer",
+          shared: !!shared,
+        }),
+      });
+      setFinalDecision(decision);
+      setMode("done");
+    } catch (e) {
+      setMode("idle");
+    }
+  }
+
+  return (
+    <div className="relative bg-stone-900 border-l-4 border-amber-600 rounded-r-lg p-5 pr-32 shadow-lg">
+      <Stamp hasMatch={hasStrongMatch} />
+      <div className="flex items-baseline gap-3 flex-wrap">
+        <h3 className="font-mono text-lg font-bold text-stone-100">{item.rule_id}</h3>
+        <SeverityChip severity={item.severity} />
+      </div>
+      <p className="text-stone-400 text-sm mt-1 max-w-md">{item.description}</p>
+
+      {hasStrongMatch && (
+        <div className="mt-4 bg-stone-50 rounded p-4 -rotate-1 shadow-md max-w-xl">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-amber-700 text-xs font-serif uppercase tracking-wide">
+              {best.repo} &middot; {best.decision}
+            </div>
+            <span
+              className={
+                "text-xs font-mono px-2 py-0.5 rounded " +
+                (best.source === "shared_community"
+                  ? "bg-teal-100 text-teal-800"
+                  : "bg-stone-200 text-stone-700")
+              }
+            >
+              {best.source === "shared_community" ? "shared community" : "your team"}
+            </span>
+          </div>
+          <p className="text-stone-800 font-serif italic text-sm leading-snug">
+            &ldquo;{best.reasoning}&rdquo;
+          </p>
+        </div>
+      )}
+
+      {crossRepo && (
+        <p className="text-stone-500 text-xs font-mono mt-3">
+          Flagged {crossRepo.total} times across {crossRepo.repo_count} repos, org-wide
+        </p>
+      )}
+
+      <p className="font-serif italic text-amber-400 mt-4">{item.recommendation}</p>
+
+      <button
+        onClick={toggleHistory}
+        className="text-stone-500 hover:text-stone-300 text-xs font-mono underline mt-3"
+      >
+        {historyOpen ? "Hide audit trail" : "View audit trail"}
+      </button>
+
+      {historyOpen && (
+        <div className="mt-3 bg-stone-950 border border-stone-800 rounded p-3 max-w-xl">
+          {historyLoading && (
+            <p className="text-stone-500 text-xs font-mono">Loading history...</p>
+          )}
+          {!historyLoading && history && history.length === 0 && (
+            <p className="text-stone-500 text-xs font-mono">No prior decisions recorded for this rule.</p>
+          )}
+          {!historyLoading && history && history.length > 0 && (
+            <ul className="space-y-2">
+              {history.map((h, i) => (
+                <li key={i} className="text-xs font-mono text-stone-400 border-l-2 border-stone-700 pl-3">
+                  <span className="text-stone-200">{h.repo}</span>
+                  {" \u00b7 "}
+                  <span className={h.decision === "fixed" ? "text-teal-400" : "text-amber-400"}>
+                    {h.decision}
+                  </span>
+                  {" \u00b7 "}
+                  {h.decided_by}
+                  {" \u00b7 "}
+                  {h.decided_at ? new Date(h.decided_at).toLocaleString() : ""}
+                  <div className="text-stone-500 mt-0.5">{h.reasoning}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {mode === "idle" && (
+        <div className="flex gap-3 mt-5">
+          {hasStrongMatch && (
+            <button
+              onClick={() => submitDecision(best.decision, best.reasoning, false)}
+              className="bg-teal-700 hover:bg-teal-600 text-white text-sm font-medium px-4 py-2 rounded"
+            >
+              Accept
+            </button>
+          )}
+          <button
+            onClick={() => setMode("overriding")}
+            className="border border-rose-700 text-rose-400 hover:bg-rose-950 text-sm font-medium px-4 py-2 rounded"
+          >
+            Override
+          </button>
+        </div>
+      )}
+
+      {mode === "overriding" && (
+        <div className="mt-5 bg-stone-800 rounded p-4 max-w-xl">
+          <div className="flex gap-4 mb-3">
+            <label className="flex items-center gap-2 text-sm text-stone-300">
+              <input
+                type="radio"
+                name={"decision-" + item.warning_id}
+                checked={overrideDecision === "dismissed"}
+                onChange={() => setOverrideDecision("dismissed")}
+              />
+              Dismiss
+            </label>
+            <label className="flex items-center gap-2 text-sm text-stone-300">
+              <input
+                type="radio"
+                name={"decision-" + item.warning_id}
+                checked={overrideDecision === "fixed"}
+                onChange={() => setOverrideDecision("fixed")}
+              />
+              Mark fixed
+            </label>
+          </div>
+          <textarea
+            value={overrideReasoning}
+            onChange={(e) => setOverrideReasoning(e.target.value)}
+            placeholder="Why? This becomes the precedent for the next match."
+            className="w-full bg-stone-900 text-stone-200 text-sm rounded p-2 border border-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-600"
+            rows={2}
+          />
+          <label className="flex items-center gap-2 text-xs text-stone-400 mt-2">
+            <input
+              type="checkbox"
+              checked={shareAnonymously}
+              onChange={(e) => setShareAnonymously(e.target.checked)}
+            />
+            Share this reasoning anonymously with other organizations
+          </label>
+          <div className="flex gap-3 mt-3">
+            <button
+              onClick={() => submitDecision(overrideDecision, overrideReasoning, shareAnonymously)}
+              disabled={!overrideReasoning.trim()}
+              className="bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded"
+            >
+              Save decision
+            </button>
+            <button onClick={() => setMode("idle")} className="text-stone-400 text-sm px-4 py-2">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === "submitting" && <p className="text-stone-500 text-sm mt-5">Saving...</p>}
+
+      {mode === "done" && (
+        <p className="text-teal-400 text-sm font-mono mt-5">
+          &#10003; Recorded as {finalDecision} &mdash; now part of the case history.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function Precedent() {
+  const [rawInput, setRawInput] = useState("");
+  const [results, setResults] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [errorMsg, setErrorMsg] = useState("");
+
+  async function submitScan() {
+    setStatus("loading");
+    setErrorMsg("");
+    let payload;
+    try {
+      payload = JSON.parse(rawInput);
+    } catch (e) {
+      setStatus("error");
+      setErrorMsg("That isn't valid JSON. Check for a stray comma or missing bracket.");
+      return;
+    }
+    try {
+      const resp = await fetch(INGEST_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.results) {
+        throw new Error(data.error || "Unexpected response from the review service.");
+      }
+      setResults(data.results);
+      setStatus("idle");
+    } catch (e) {
+      setStatus("error");
+      setErrorMsg(e.message || "Couldn't reach the review service.");
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-stone-950 text-stone-100 font-sans">
+      <header className="border-b border-stone-800 px-6 py-5">
+        <h1 className="font-serif text-2xl tracking-tight">Precedent</h1>
+        <p className="text-stone-500 text-sm mt-0.5">
+          Every scan warning, judged by what's already been decided.
+        </p>
+      </header>
+      <main className="max-w-2xl mx-auto px-6 py-8">
+        {!results && (
+          <div className="border border-dashed border-stone-700 rounded-lg p-6">
+            <label className="block text-stone-400 text-sm mb-2 font-mono">
+              Paste scanner output (JSON)
+            </label>
+            <textarea
+              value={rawInput}
+              onChange={(e) => setRawInput(e.target.value)}
+              rows={8}
+              placeholder='{"repo": "...", "warnings": [...]}'
+              className="w-full bg-stone-900 text-stone-200 text-sm font-mono rounded p-3 border border-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-600"
+            />
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => setRawInput(JSON.stringify(SAMPLE_SCAN, null, 2))}
+                className="border border-stone-700 text-stone-300 hover:bg-stone-800 text-sm font-medium px-4 py-2 rounded"
+              >
+                Load sample scan
+              </button>
+              <button
+                onClick={submitScan}
+                disabled={!rawInput.trim() || status === "loading"}
+                className="bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded"
+              >
+                {status === "loading" ? "Reviewing cases..." : "Submit for review"}
+              </button>
+            </div>
+            {status === "error" && <p className="text-rose-400 text-sm mt-3 font-mono">{errorMsg}</p>}
+          </div>
+        )}
+        {results && (
+          <div>
+            <div className="flex items-center justify-between mb-5">
+              <p className="text-stone-500 text-sm font-mono">
+                {results.length} warning{results.length !== 1 ? "s" : ""} reviewed
+              </p>
+              <button
+                onClick={() => { setResults(null); setRawInput(""); }}
+                className="text-stone-400 hover:text-stone-200 text-sm"
+              >
+                &larr; New scan
+              </button>
+            </div>
+            <div className="space-y-6">
+              {results.map((item) => <CaseCard key={item.warning_id} item={item} />)}
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Precedent />);
+</script>
+</body>
+</html>
