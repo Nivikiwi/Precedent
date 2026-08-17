@@ -40,7 +40,7 @@ issues, blog posts, and postmortems this project is grounded in.
 
 ## Architecture
 
-![Architecture diagram](architecture_diagram.jpg)
+![Architecture diagram](precendent-arch.jpg)
 
 - **CockroachDB Serverless** (`ap-south-1`) — the persistent memory
   layer. Two tables, `warnings` and `decisions`, with a
