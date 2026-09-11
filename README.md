@@ -10,8 +10,8 @@ making the developer investigate from scratch. Every Accept/Override
 becomes new memory for the next match.
 
 Built for the CockroachDB x AWS Agentic Hackathon (2026).
+- **Live app:** http://scan-warning-memory-niv-2026.s3-website.ap-south-1.amazonaws.com/
 
-- **Live app:** `<http://scan-warning-memory-niv-2026.s3-website.ap-south-1.amazonaws.com/>`
 
 
 ---
